@@ -9,6 +9,12 @@ import pytz
 import csv
 import sys
 
+# Update Machine's sensors metadata
+# [V] Added MachineParentDocID when creating new sensor (createSensor)
+# [V] createSensor will only create an initial metadata on ParentMachine doc.
+# [V] Implemented getSensorParentDocID
+# [V] Update machine's sensor metadata when adding new sensor data (addSensorDataRow)
+
 # v3 = changed the document layout for React Integration
     # All c,f, and p fields name changed to be same as each others
       # "CompanyName", "FactoryName", "ProdLineName" > "name", etc 
@@ -134,7 +140,9 @@ class FsModule:
         return newDocID
 
     def createSensor(self, companyID, factoryID, prodLineID, machineID, sensorName, sensorTagID, sensorData=None):
-        """ Write a new sensor document in "Sensors" root collection. Returns newly created DocID"""
+        """ Write a new sensor document in "Sensors" root collection. Returns newly created DocID
+        
+        Then, will set an initial sensor metadata in parent's (machine) document. (without actual sensor numerical data"""
 
         if sensorData is None:
             # For some reason, Firestore doesn't support server timestamp to be put inside Array.
@@ -158,9 +166,12 @@ class FsModule:
 
         parentRef = self.db.collection("Sensors")
 
+        machineParentDocID = "Companies/{}/Factories/{}/ProdLines/{}/Machines/{}".format(companyID,factoryID,prodLineID,machineID)
+
         data = {
-            u'name'           : sensorName,
+            u'name'                 : sensorName,
             u'SensorTagID'          : sensorTagID,
+            u'ParentMachineDocID'   : machineParentDocID,
             u'data'                 : [sensorData]
         }
 
@@ -168,12 +179,19 @@ class FsModule:
         
         newDocID = ref[1].id
 
-        # Update ProdLines Metadata
-        self.updateSensorsMetadata(companyID,factoryID,prodLineID,machineID,sensorName,sensorTagID,newDocID)
+        # Update Machine's Sensor Metadata (with no data)
+        self.addInitialSensorsMetadata(machineParentDocID,sensorName,sensorTagID,newDocID)
 
         return newDocID
 
     # Read
+
+    def getSensorParentDocID(self, sensorID):
+        """Returns a complete address of the given sensor's MachineParentDocID from 'Sensors' collection."""
+
+        resDict = fa.fm.readDocument("Sensors/{}".format(sensorID))
+
+        return resDict['ParentMachineDocID']
 
     def readCompany(self, companyName=None, docID=None):
         """ Get a company document by either its Name or DocID
@@ -219,7 +237,7 @@ class FsModule:
         # print(my_dict)
 
         doc = self.db.document(target).get() 
-        return {doc.id: doc.to_dict()}
+        return doc.to_dict()
 
     # Update
 
@@ -265,8 +283,8 @@ class FsModule:
             }])
         })
 
-    def updateSensorsMetadata(self, companyID, factoryID, prodLineID, machineID, sensorName, sensorTagID, sensorID, sensorData=None):
-        """Updates metadata of a Machine's Sensors Metadata"""
+    def addInitialSensorsMetadata(self, parentMachineDocID, sensorName, sensorTagID, sensorID, sensorData=None):
+        """Set initial metadata (No numerical data) of a Machine's Sensors Metadata"""
 
         # Dummy Sensor Data
         if sensorData is None:
@@ -283,7 +301,7 @@ class FsModule:
                 'fft':None
             }
 
-        parentRef = self.db.document("Companies/{}/Factories/{}/ProdLines/{}/Machines/{}".format(companyID, factoryID, prodLineID, machineID))
+        parentRef = self.db.document(parentMachineDocID)
 
         parentRef.update({
                 'sensorsMetadata': firestore.ArrayUnion([{
@@ -301,11 +319,45 @@ class FsModule:
                     '_SensorID': sensorID
             }])
         })
+
+    def updateSensorMetadata(self, parentMachineDocID, sensorID, sensorData):
+        """Updates latest sensor data of a Machine's Sensors Metadata"""
+
+        parentRef = self.db.document(parentMachineDocID)
+
+        listOfMetadata = parentRef.get().to_dict()['sensorsMetadata']
+        dataIndex = self.findElementFromListOfDicts(listOfMetadata,"_SensorID", sensorID)
+
+        targetData = listOfMetadata[dataIndex]
+
+        # Delete the old data from the list
+        del listOfMetadata[dataIndex]
+
+        targetData['_timestamp'] = sensorData['_timestamp']
+        targetData['batt'] = sensorData['batt'] 
+        targetData['peak_x'] = sensorData['peak_x'] 
+        targetData['peak_y'] = sensorData['peak_y'] 
+        targetData['peak_z'] = sensorData['peak_z'] 
+        targetData['rms_x'] = sensorData['rms_x'] 
+        targetData['rms_y'] = sensorData['rms_y'] 
+        targetData['rms_z'] = sensorData['rms_z'] 
+        targetData['temp'] = sensorData['temp'] 
+
+        # Re-add newly updated metadata to list
+        listOfMetadata.append(targetData)
+
+        # Post the new list to db
+
+        data = {
+            'sensorsMetadata' : listOfMetadata
+        }
+
+        parentRef.update(data)
     
-    def addSensorDataRow(self, sensorID, data=None, newData=True):
+    def addSensorDataRow(self, sensorID, data, newData=False):
         """Push a row of data to a given sensorID.
         
-        If newData, will also update the metadata"""
+        If newData, will also update the machine's sensor metadata"""
         # sensorData = {
         #     '_timestamp': None,
         #     'batt': 3.654,
@@ -319,15 +371,21 @@ class FsModule:
         #     'fft':None
         # }
 
-        if data is None and isinstance(data, list):
-            print("Data is either Empty or a List")
+        if isinstance(data, list):
+            print("Data must be a single dict containing one row of data")
             return False
-        
-        parentRef = self.db.document("Sensors/{}".format(sensorID))
 
-        parentRef.update({
+        # Step one, push sensor data to sensor doc 
+        sensorRef = self.db.document("Sensors/{}".format(sensorID))
+
+        sensorRef.update({
             'data': firestore.ArrayUnion([data])
         })
+
+        
+        # Step two, if data is new, update the metadata on ParentMachineDoc
+        parentAddr = self.getSensorParentDocID(sensorID)
+        self.updateSensorMetadata(parentAddr,sensorID,data)
 
     def addSensorDataRows(self, sensorID, data=None):
         if data is None:
@@ -339,6 +397,16 @@ class FsModule:
             'data': firestore.ArrayUnion(data)
         })
 
+    # Helper Function
+
+    def findElementFromListOfDicts(self, listOfDicts, keyToMatch, valueToMatch):
+
+        for i in range(len(listOfDicts)): 
+            if listOfDicts[i][keyToMatch] == valueToMatch: 
+                return i
+                break
+            
+        return None
 
 class FsApp:
     """This class serves as the interface of fsModule (CLI Input)"""
@@ -433,34 +501,40 @@ fa = FsApp()
 
 # fa.injectSensorData('g3weXncGUMkRPr2I9whg','sens_data.csv')
 
+
+t = datetime.now(tz=pytz.timezone('Asia/Jakarta'))
+
+# sensorData = {
+#             '_timestamp': t,
+#             'batt': 3.654,
+#             'peak_x': 5.052,
+#             'peak_y': 4.982,
+#             'peak_z': 8.565,
+#             'rms_x': 2.465,
+#             'rms_y': 2.548,
+#             'rms_z': 2.859,
+#             'temp': 65.56,
+#             'fft':None
+#         }
+
 sensorData = {
-            '_timestamp': None,
-            'batt': 3.654,
-            'peak_x': 5.052,
-            'peak_y': 4.982,
-            'peak_z': 8.565,
-            'rms_x': 2.465,
-            'rms_y': 2.548,
-            'rms_z': 2.859,
-            'temp': 65.56,
+            '_timestamp': t,
+            'batt': 1.654,
+            'peak_x': 1.052,
+            'peak_y': 1.982,
+            'peak_z': 1.565,
+            'rms_x': 1.465,
+            'rms_y': 1.548,
+            'rms_z': 1.859,
+            'temp': 11.56,
             'fft':None
         }
 
-fa.fm.addSensorDataRow("g3weXncGUMkRPr2I9whg", sensorData)
+fa.fm.addSensorDataRow("qswB8IpIsNNjdyWsVg6R", sensorData, newData=True)
 
+# parentMachine = 'Companies/kwfnAj7iXbQ2PTkpV3dw/Factories/Cmm15FMEJC14T5N5EywJ/ProdLines/6f0PBiz4Rliiba870N7V/Machines/uIZxdOKiAQaRO8yqnJ3b'
+# sensorID      = 'qswB8IpIsNNjdyWsVg6R'
+
+# fa.fm.updateSensorsMetadata(parentMachine, sensorID, sensorData)
 
 # fa.setupNewCompany()
-
-# Testing for FsModule (Use the FsApp)
-
-# fm = fsModule()
-# fm.readDocument('Companies/rDAeKWkR5cvn9SClJr9l/Factories/1po9D8ZjPnyPWlEhK0wC/ProdLines/jjxeOGYTeLnr5IwTXerO/Machines/ZwCO2wlCm0v8iRcNufr2/Sensors/KKM0WbBsESWQNFvdO4mM')
-# fm.createCompany('deleteCompany')
-# fm.updateFactoriesMetadata("rDAeKWkR5cvn9SClJr9l", "newFacName", "facDesc", "url", "facID")
-# fm.readCompany(docID='rDAeKWkR5cvn9SClJr9l')
-# fm.createFactory("rDAeKWkR5cvn9SClJr9l", "AutoMD")
-# fm.createProdLine('rDAeKWkR5cvn9SClJr9l','1po9D8ZjPnyPWlEhK0wC', "PM Super")
-# fm.createMachine('rDAeKWkR5cvn9SClJr9l','1po9D8ZjPnyPWlEhK0wC', 'jjxeOGYTeLnr5IwTXerO', "Super Dryer Machine")
-# fm.createSensor('rDAeKWkR5cvn9SClJr9l','1po9D8ZjPnyPWlEhK0wC', 'jjxeOGYTeLnr5IwTXerO', 'ZwCO2wlCm0v8iRcNufr2', "Bottom Back Sensor", 'caca')
-# fm.createSensor('rDAeKWkR5cvn9SClJr9l','icNXB9Gk5mLWrGWuBVBQ', 'TmScIiPEWf3r3YwHpVVN', 'VjUUaygQq9DaNA74bOcu','TIMESTAMP Sensor','DDDD')
-# fm.updateSensorsMetadata("rDAeKWkR5cvn9SClJr9l", "icNXB9Gk5mLWrGWuBVBQ", "TmScIiPEWf3r3YwHpVVN", "VjUUaygQq9DaNA74bOcu", "SName", "2CAC", "asdascsacascascsa" )
