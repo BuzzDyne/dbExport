@@ -14,6 +14,7 @@ import sys
 # [V] createSensor will only create an initial metadata on ParentMachine doc.
 # [V] Implemented getSensorParentDocID
 # [V] Update machine's sensor metadata when adding new sensor data (addSensorDataRow)
+# [ ] Create a functionality to update sensor metadata based on latest existing data (refreshSensorMetadatas)
 
 # v3 = changed the document layout for React Integration
     # All c,f, and p fields name changed to be same as each others
@@ -124,10 +125,10 @@ class FsModule:
         parentRef = self.db.collection("Companies/{}/Factories/{}/ProdLines/{}/Machines".format(companyID, factoryID, prodLineID))
 
         data = {
-            u'name'         : machineName,
-            u'desc'         : machineDesc,
-            u'imgUrl'       : machineImgUrl,
-            u'childrenMetadata'     : []
+            u'name'             : machineName,
+            u'desc'             : machineDesc,
+            u'imgUrl'           : machineImgUrl,
+            u'sensorsMetadata'  : []
         }
 
         ref = parentRef.add(data)
@@ -144,25 +145,25 @@ class FsModule:
         
         Then, will set an initial sensor metadata in parent's (machine) document. (without actual sensor numerical data"""
 
-        if sensorData is None:
-            # For some reason, Firestore doesn't support server timestamp to be put inside Array.
-            # Temp Fix: Use client timestamp
+        # if sensorData is None:
+        #     # For some reason, Firestore doesn't support server timestamp to be put inside Array.
+        #     # Temp Fix: Use client timestamp
 
-            # Dummy data
-            t = datetime.now(tz=pytz.timezone('Asia/Jakarta'))
+        #     # Dummy data
+        #     t = datetime.now(tz=pytz.timezone('Asia/Jakarta'))
 
-            sensorData = {
-                u'_timestamp': t,
-                u'batt': 3.6,
-                u'peak_x': 2.1,
-                u'peak_y': 2.1,
-                u'peak_z': 2.1,
-                u'rms_x': 1.24,
-                u'rms_y': 1.24,
-                u'rms_z': 1.24,
-                u'temp': 45.44,
-                u'fft':'4,4,2;2,2,1;3,3,2;'
-            }
+        #     sensorData = {
+        #         u'_timestamp': t,
+        #         u'batt': 0,
+        #         u'peak_x': 0,
+        #         u'peak_y': 0,
+        #         u'peak_z': 0,
+        #         u'rms_x': 0,
+        #         u'rms_y': 0,
+        #         u'rms_z': 0,
+        #         u'temp': 0,
+        #         u'fft':'1,1,1;2,2,2;3,3,3;'
+        #     }
 
         parentRef = self.db.collection("Sensors")
 
@@ -172,7 +173,7 @@ class FsModule:
             u'name'                 : sensorName,
             u'SensorTagID'          : sensorTagID,
             u'ParentMachineDocID'   : machineParentDocID,
-            u'data'                 : [sensorData]
+            u'data'                 : []
         }
 
         ref = parentRef.add(data)
@@ -320,19 +321,35 @@ class FsModule:
             }])
         })
 
-    def updateSensorMetadata(self, parentMachineDocID, sensorID, sensorData):
+    def refreshSensorMetadata(self, sensorID):
+        """Takes a Sensor Document ID, Get the latest data row, and push it to MachineParent's Metada"""
+
+        # Get sensors data
+        dataRows = self.readDocument("Sensors/{}".format(sensorID))['data']
+
+        # Sort by latest first
+        dataRows = sorted(dataRows, key = lambda i: i['_timestamp'], reverse=True)
+
+        # Copy latest data to ParentMachine's metadata
+        self.updateSensorMetadata(sensorID, dataRows[0])
+        return
+
+    def updateSensorMetadata(self, sensorID, sensorData):
         """Updates latest sensor data of a Machine's Sensors Metadata"""
 
+        # Get current sensor metadata from MachineParent 
+        parentMachineDocID = self.getSensorParentDocID(sensorID)
         parentRef = self.db.document(parentMachineDocID)
-
         listOfMetadata = parentRef.get().to_dict()['sensorsMetadata']
-        dataIndex = self.findElementFromListOfDicts(listOfMetadata,"_SensorID", sensorID)
 
+        # Find the sensor to be updated (by Document ID)
+        dataIndex = self.findElementFromListOfDicts(listOfMetadata,"_SensorID", sensorID)
         targetData = listOfMetadata[dataIndex]
 
         # Delete the old data from the list
         del listOfMetadata[dataIndex]
 
+        # (Locally) update sensor metadata
         targetData['_timestamp'] = sensorData['_timestamp']
         targetData['batt'] = sensorData['batt'] 
         targetData['peak_x'] = sensorData['peak_x'] 
@@ -343,21 +360,19 @@ class FsModule:
         targetData['rms_z'] = sensorData['rms_z'] 
         targetData['temp'] = sensorData['temp'] 
 
-        # Re-add newly updated metadata to list
+        # Re-append newly updated metadata to list
         listOfMetadata.append(targetData)
 
         # Post the new list to db
-
         data = {
             'sensorsMetadata' : listOfMetadata
         }
-
         parentRef.update(data)
     
     def addSensorDataRow(self, sensorID, data, newData=False):
         """Push a row of data to a given sensorID.
         
-        If newData, will also update the machine's sensor metadata"""
+        If newData, will also update the machine's sensor metadata using given sensor datarow"""
         # sensorData = {
         #     '_timestamp': None,
         #     'batt': 3.654,
@@ -384,23 +399,25 @@ class FsModule:
 
         
         # Step two, if data is new, update the metadata on ParentMachineDoc
-        parentAddr = self.getSensorParentDocID(sensorID)
-        self.updateSensorMetadata(parentAddr,sensorID,data)
+        if(newData == True):
+            self.updateSensorMetadata(sensorID,data)
 
-    def addSensorDataRows(self, sensorID, data=None):
-        if data is None:
-            return False
+    def addSensorDataRows(self, sensorID, data):
+        """Pushes a List of Sensor Data rows to a specified Sensor Document.
         
+        Also refreshes the ParentMachine's metadata to its latest sensor datarow"""
         parentRef = self.db.document("Sensors/{}".format(sensorID))
 
         parentRef.update({
             'data': firestore.ArrayUnion(data)
         })
 
+        self.refreshSensorMetadata(sensorID)
+
     # Helper Function
 
     def findElementFromListOfDicts(self, listOfDicts, keyToMatch, valueToMatch):
-
+        """Returns the index of a specified Dict inside a given ListOfDicts based on given key and value to match"""
         for i in range(len(listOfDicts)): 
             if listOfDicts[i][keyToMatch] == valueToMatch: 
                 return i
@@ -419,6 +436,8 @@ class FsApp:
         self.sensorRef      = ''
 
     def setupNewCompany(self):
+        """A tool to create a new company and all its sublevels"""
+
         print("--- Welcome to Vibsense Company Creator ---\n")
 
         # Company
@@ -446,6 +465,39 @@ class FsApp:
         sTag    = input("Please Input Sensor Hexadecimal Tag: \n")
         sRef = self.fm.createSensor(cRef,fRef, pRef, mRef, sName, sTag)
         print("Created Sensor {} ({})\n".format(sName, sRef))
+
+        # SensorData
+        confirmInput = input("Do you want to add data to {} ({}) ? (y/n)".format(sName, sRef))
+        if(confirmInput == 'y'):
+            dataSrc = input("Please input the data source filename (csv): \n")
+            self.addSensorDataRows(sRef,dataSrc)
+
+    def addSensorDataRows(self, sensorID, dataFileName):
+      """Pushes multiple data-rows of a sensor (given the docID)"""
+      dataRows = self.parseSensorData(dataFileName)
+
+      self.fm.addSensorDataRows(sensorID,dataRows)
+
+    def addSensorDataRow(self, sensorID, sensData):
+        """Pushes a single data-row of a sensor (given the DocID)"""
+
+        # sensData example
+        # t = datetime.now(tz=pytz.timezone('Asia/Jakarta'))
+        # sensorData = {
+        #             '_timestamp': t,
+        #             'batt': 3.333,
+        #             'peak_x': 5.555,
+        #             'peak_y': 4.444,
+        #             'peak_z': 8.888,
+        #             'rms_x': 2.222,
+        #             'rms_y': 2.222,
+        #             'rms_z': 2.222,
+        #             'temp': 66.66,
+        #             'fft':None
+        #         }
+        self.fm.addSensorDataRow(sensorID,sensData,True)
+
+    # Helper function
 
     def parseSensorData(self, fileName):
         """Take SensorData(.csv) file location as param and returns a list of dicts of SensorData"""
@@ -485,56 +537,24 @@ class FsApp:
 
         return result
 
-    def injectSensorData(self, sensorID, dataFileName):
-      dataRows = self.parseSensorData(dataFileName)
-
-      # for row in dataRows:
-      #   self.fm.addSensorDataRow(sensorID, data=row)
-      
-      self.fm.addSensorDataRows(sensorID,dataRows)
-
-      print("Sensor updated.")
-
-
 
 fa = FsApp()
 
-# fa.injectSensorData('g3weXncGUMkRPr2I9whg','sens_data.csv')
+# sensData example
+    # t = datetime.now(tz=pytz.timezone('Asia/Jakarta'))
+    # sensorData = {
+    #             '_timestamp': t,
+    #             'batt': 3.333,
+    #             'peak_x': 5.555,
+    #             'peak_y': 4.444,
+    #             'peak_z': 8.888,
+    #             'rms_x': 2.222,
+    #             'rms_y': 2.222,
+    #             'rms_z': 2.222,
+    #             'temp': 66.66,
+    #             'fft':None
+    #         }
 
-
-t = datetime.now(tz=pytz.timezone('Asia/Jakarta'))
-
-# sensorData = {
-#             '_timestamp': t,
-#             'batt': 3.654,
-#             'peak_x': 5.052,
-#             'peak_y': 4.982,
-#             'peak_z': 8.565,
-#             'rms_x': 2.465,
-#             'rms_y': 2.548,
-#             'rms_z': 2.859,
-#             'temp': 65.56,
-#             'fft':None
-#         }
-
-sensorData = {
-            '_timestamp': t,
-            'batt': 1.654,
-            'peak_x': 1.052,
-            'peak_y': 1.982,
-            'peak_z': 1.565,
-            'rms_x': 1.465,
-            'rms_y': 1.548,
-            'rms_z': 1.859,
-            'temp': 11.56,
-            'fft':None
-        }
-
-fa.fm.addSensorDataRow("qswB8IpIsNNjdyWsVg6R", sensorData, newData=True)
-
-# parentMachine = 'Companies/kwfnAj7iXbQ2PTkpV3dw/Factories/Cmm15FMEJC14T5N5EywJ/ProdLines/6f0PBiz4Rliiba870N7V/Machines/uIZxdOKiAQaRO8yqnJ3b'
-# sensorID      = 'qswB8IpIsNNjdyWsVg6R'
-
-# fa.fm.updateSensorsMetadata(parentMachine, sensorID, sensorData)
+# fa.addSensorDataRow("lOWj7bWGrMtxhw9hwvJo", sensorData)
 
 # fa.setupNewCompany()
