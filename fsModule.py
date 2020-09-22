@@ -14,7 +14,7 @@ import sys
     # [V] createSensor will only create an initial metadata on ParentMachine doc.
     # [V] Implemented getSensorParentDocID
     # [V] Update machine's sensor metadata when adding new sensor data (addSensorDataRow)
-    # [ ] Create a functionality to update sensor metadata based on latest existing data (refreshSensorMetadatas)
+    # [V] Create a functionality to update sensor metadata based on latest existing data (refreshSensorMetadatas)
 
     # v3 = changed the document layout for React Integration
         # All c,f, and p fields name changed to be same as each others
@@ -192,6 +192,23 @@ class FsModule:
         resDict = fa.fs.readDocument("Sensors/{}".format(sensorID))
 
         return resDict['ParentMachineDocID']
+
+    def getAllCompanies(self):
+        """returns a list of Company dicts (id and name)"""
+
+        docs = self.db.collection('Companies').stream()
+
+        resultList = []
+
+        for doc in docs:
+            res = {
+                "id"    : doc.id,
+                "name"  : doc.to_dict()["name"]
+            }
+
+            resultList.append(res)
+
+        return resultList
 
     def readCompany(self, companyName=None, docID=None):
         """ Get a company document by either its Name or DocID
@@ -412,6 +429,13 @@ class FsModule:
         })
 
         self.refreshSensorMetadata(sensorID)
+
+    def addUserToCompany(self, companyID, userID):
+        cRef = self.db.document("Companies/{}".format(companyID))
+
+        cRef.update({
+            u'registeredUserIDs': firestore.ArrayUnion([userID])
+        })
 
     # Helper Function
 

@@ -1,15 +1,18 @@
 import fsModule
-import authModule as auth
+import authModule
 
 class DevApp:
     """This class serves as the interface of fsModule (CLI Input)"""
     def __init__(self):
         self.fs = fsModule.FsModule()
+        self.auth = authModule.AuthModule()
         self.companyRef     = ''
         self.factoryRef     = ''
         self.prodLineRef    = ''
         self.machineRef     = ''
         self.sensorRef      = ''
+
+    # Functions
 
     def setupNewCompany(self):
         """A tool to create a new company and all its sublevels"""
@@ -73,6 +76,29 @@ class DevApp:
         #         }
         self.fs.addSensorDataRow(sensorID,sensData,True)
 
+    def setupNewUser(self):
+
+        # Account Creation
+        uEmail  = input("Please Input Email: \n")
+        uPw     = input("Please Input Password: \n")
+        uid     = self.auth.createUser(uEmail, uPw)
+        print("\nCreated account {} ({})\n".format(uEmail, uid))
+
+        # Show company list
+        index = 0
+        companyList = self.fs.getAllCompanies()
+        print("Choose a company to associate the user with:")
+
+        for c in companyList:
+            print("[{}] {} ({})".format(index, c['name'], c['id']))
+            index = index + 1
+        choice  = int(input("Input Company Index: "))
+
+        # Link Account to a Company
+        self.fs.addUserToCompany(companyList[choice]['id'], uid)
+        print("\nLinked account ({}) to company ({}) \n".format(uEmail, companyList[choice]['name']))
+
+
     # Helper function
 
     def parseSensorData(self, fileName):
@@ -115,6 +141,8 @@ class DevApp:
 
 
 dev = DevApp()
+
+# dev.setupNewUser()
 
 # sensData example
     # t = datetime.now(tz=pytz.timezone('Asia/Jakarta'))

@@ -1,14 +1,13 @@
 from firebase_admin import auth
 
-class AuthUser:
-    def __init__(self, userEmail, userPw, userEmailVerified=None, userPhone=None, userDisplayName=None, userPhotoUrl=None, userDisabled = None):
+class AuthModule:
 
-
-        self.email  = userEmail
-        self.pw     = userPw
-
-        self.email_verified=False
-        self.phone_number='+15555550100'
-        self.displayName='John Doe'
-        self.photoUrl='http://www.example.com/12345678/photo.png'
-        self.disabled=False
+    def createUser(self, userEmail, userPw):
+        """Creates a new user and returns its uid"""
+        user = auth.create_user(email= userEmail, password= userPw)
+        
+        # print('ID: {}'.format(user.uid))
+        # print('Email: {}'.format(user.email))
+        # print('User: {}'.format(user))
+        
+        return user.uid
