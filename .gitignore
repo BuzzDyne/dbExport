@@ -139,5 +139,6 @@ cython_debug/
 
 # Custom ignores
 DupeEnv/
+FireEnv/
 .vscode/
 vibsensedup-firebase-adminsdk-uzlnm-c655ba999f.json
