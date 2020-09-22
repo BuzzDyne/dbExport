@@ -1,4 +1,5 @@
 import fsModule
+import authModule as auth
 
 class DevApp:
     """This class serves as the interface of fsModule (CLI Input)"""
@@ -132,4 +133,4 @@ dev = DevApp()
 
 # dev.addSensorDataRow("lOWj7bWGrMtxhw9hwvJo", sensorData)
 
-dev.setupNewCompany()
+# dev.setupNewCompany()
